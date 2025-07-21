@@ -23,43 +23,38 @@ class ElementaryAlgebra(BasicAlgebra):
     def rsub(self,x,y): return y-x
     def div(self, x, y): return x/y
     def rdiv(self, x, y): return y/x
-    def mm(self,x,y): return x @ y
-    def rmm(self,x,y): return y @ x
+    def matmul(self,x,y): return x @ y
+    def rmatmul(self,x,y): return y @ x
+    def dot(self,x,y): return x.dot(y)
+    def outer(self,x,y): return x.outer(y)
+    def kron(self,x,y): return x.kron(y)
+
 register_(ElementaryAlgebra(), 'elementary')
 
 class TropicalSemiring(Algebra):
-    def __init__(self, type: Literal['min', 'max'] = 'min'):
-        self.type = type
+    def __init__(self, add:Literal['min','max']='min'):
+        self._add = add
 
     def add(self, x, y):
-        if self.type == 'min': return torch.minimum(x, y)
-        if self.type == 'max': return torch.maximum(x, y)
-        raise ValueError(self.type)
+        if self._add == 'min': return torch.minimum(x, y)
+        if self._add == 'max': return torch.maximum(x, y)
+        raise ValueError(self._add)
 
     def sum(self, x, dim = None, keepdim = False):
-        if self.type == 'min': return x.amin(dim, keepdim) # type:ignore
-        if self.type == 'max': return x.amax(dim, keepdim) # type:ignore
-        raise ValueError(self.type)
+        if self._add == 'min': return x.amin(dim, keepdim) # type:ignore
+        if self._add == 'max': return x.amax(dim, keepdim) # type:ignore
+        raise ValueError(self._add)
 
-    def sub(self, x, y):
-        if self.type == 'min': raise RuntimeError
-        if self.type == 'max':
-            # x - y is equivalent to solving max(a, y) = x for a
-            # if y == x, then a <= y
-            # if y < x then a = x
-            # if y > x then there is no solution lets relax into a=y
-            # so it becomes max(x, y)
-            return torch.maximum(x, y)
-        raise ValueError(self.type)
-
-    def mul(self, x, y): return x + y
+    def sub(self, x, y): raise NotImplementedError()
+    def mul(self, x, y):  return x + y
     def pow(self, base, exponent): return base*exponent
     def div(self, x, y): return x - y
     def reciprocal(self, x): return -x
-
     def prod(self, x, dim=None, keepdim=False): return torch.sum(x, dim, keepdim)
-register_(TropicalSemiring('min'), 'tropical', 'tropical_min')
-register_(TropicalSemiring('max'), 'tropical_max')
+
+register_(TropicalSemiring('min'), 'tropical', 'tropical min')
+register_(TropicalSemiring('max'), 'tropical max')
+
 
 class FuzzySemiring(Algebra):
     def add(self, x, y): return torch.maximum(x, y)
@@ -92,8 +87,8 @@ class ViterbiSemiring(Algebra):
     def neg(self, x): raise NotImplementedError # not defined
     def reciprocal(self, x): return x.reciprocal()
     def pow(self, base, exponent): return base ** exponent
-register_(ViterbiSemiring('max'), 'viterbi', 'viterbi_max')
-register_(ViterbiSemiring('min'), 'viterbi_min')
+register_(ViterbiSemiring('max'), 'viterbi', 'viterbi max')
+register_(ViterbiSemiring('min'), 'viterbi min')
 
 class LogSemiring(Algebra):
     def add(self, x, y): return torch.logaddexp(x, y)

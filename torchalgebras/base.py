@@ -1,7 +1,7 @@
 # pylint: disable=abstract-method
 import math
 
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, overload
 import torch
 
 ALGEBRAS: "dict[str, Algebra]" = dict()
@@ -47,7 +47,7 @@ class Algebra:
         if dim is None: return torch.max(x)
         return x.amax(dim, keepdim)
 
-    def mm(self, x: torch.Tensor, y: torch.Tensor):
+    def matmul(self, x: torch.Tensor, y: torch.Tensor):
         # this imlements matmul by calling mul and sum
 
         x_squeeze = False
@@ -68,8 +68,56 @@ class Algebra:
 
         return res
 
-    def matmul(self, x:torch.Tensor, y:torch.Tensor):
-        return self.mm(x, y)
+    def mm(self, x:torch.Tensor, y:torch.Tensor):
+        return self.matmul(x, y)
+
+    def dot(self, x:torch.Tensor, y:torch.Tensor):
+        return self.matmul(x.unsqueeze(-2), y.unsqueeze(-1))
+
+    def outer(self, x:torch.Tensor, y:torch.Tensor):
+        return self.matmul(x.unsqueeze(-1), y.unsqueeze(-2))
+
+
+    def kron(self, x: torch.Tensor, y: torch.Tensor):
+        # this implements kronecker product via mul
+        if x.ndim < y.ndim:
+            x = x.view(*(1,) * (y.ndim - x.ndim), *x.shape)
+        elif y.ndim < x.ndim:
+            y = y.view(*(1,) * (x.ndim - y.ndim), *y.shape)
+
+        x_expanded = x.view(*x.shape, *(1,) * y.ndim)
+        y_expanded = y.view(*(1,) * x.ndim, *y.shape)
+        outer = self.mul(x_expanded, y_expanded)
+
+        permute_dims = [] # for 2D inputs this list becomes [0, 2, 1, 3]
+        for i in range(x.ndim):
+            permute_dims.append(i)
+            permute_dims.append(i + x.ndim)
+
+        permuted_result = outer.permute(permute_dims)
+
+        # (d1, e1, d2, e2) becomes (d1*e1, d2*e2).
+        return permuted_result.reshape([s1 * s2 for s1, s2 in zip(x.shape, y.shape)])
+
+    @overload
+    def convert(self, tensor1: "MaybeAlgebraicTensor") -> "AlgebraicTensor": ...
+    @overload
+    def convert(self, tensor1: "MaybeAlgebraicTensor"  , tensor2: "MaybeAlgebraicTensor", *tensors: "MaybeAlgebraicTensor") -> "list[AlgebraicTensor]": ...
+    def convert(self, tensor1: "MaybeAlgebraicTensor", tensor2: "MaybeAlgebraicTensor | None" = None, *tensors: "MaybeAlgebraicTensor") -> "AlgebraicTensor | list[AlgebraicTensor]":
+        alg_tensors = [AlgebraicTensor(t, self) for t in (tensor1, tensor2, *tensors) if t is not None]
+        if len(alg_tensors) == 1: return alg_tensors[0]
+        return alg_tensors
+
+
+    @overload
+    def totensor(self, tensor1: "MaybeAlgebraicTensor") -> torch.Tensor: ...
+    @overload
+    def totensor(self, tensor1: "MaybeAlgebraicTensor"  , tensor2: "MaybeAlgebraicTensor", *tensors: "MaybeAlgebraicTensor") -> list[torch.Tensor]: ...
+    def totensor(self, tensor1: "MaybeAlgebraicTensor", tensor2: "MaybeAlgebraicTensor | None" = None, *tensors: "MaybeAlgebraicTensor") -> torch.Tensor | list[torch.Tensor]:
+        torch_tensors = [totensor(t) for t in (tensor1, tensor2, *tensors) if t is not None]
+        if len(torch_tensors) == 1: return torch_tensors[0]
+        return torch_tensors
+
 
 def get_algebra(algebra: str | Algebra) -> Algebra:
     if isinstance(algebra, str): return ALGEBRAS[algebra]
@@ -150,6 +198,16 @@ class AlgebraicTensor:
 
     def numel(self): return self.data.numel()
 
+    def t(self): return self.__class__(self.data.t(), self.algebra)
+    @property
+    def T(self): return self.__class__(self.data.T, self.algebra)
+    @property
+    def mT(self): return self.__class__(self.data.mT, self.algebra)
+    @property
+    def H(self): return self.__class__(self.data.H, self.algebra)
+    @property
+    def mH(self): return self.__class__(self.data.mH, self.algebra)
+
     def requires_grad_(self, mode=True):
         return self.__class__(self.data.requires_grad_(mode), self.algebra)
 
@@ -219,24 +277,30 @@ class AlgebraicTensor:
     def max(self, dim: int | None, keepdim = False):
         return self.__class__(self.algebra.max(self.data, dim, keepdim), self.algebra)
 
-    def mm(self, other): return self.__class__(self.algebra.mm(self.data, _ensure_tensor(other, self)), self.algebra)
-    def rmm(self, other): return self.__class__(self.algebra.mm(_ensure_tensor(other, self), self.data), self.algebra)
-    def matmul(self, other): return self.mm(other)
-    def __matmul__(self, other): return self.mm(other)
-    def __rmatmul__(self, other): return self.rmm(other)
+    def matmul(self, other): return self.__class__(self.algebra.matmul(self.data, _ensure_tensor(other, self)), self.algebra)
+    def rmatmul(self, other): return self.__class__(self.algebra.matmul(_ensure_tensor(other, self), self.data), self.algebra)
+    def mm(self, other): return self.matmul(other)
+    def __matmul__(self, other): return self.matmul(other)
+    def __rmatmul__(self, other): return self.rmatmul(other)
+
+    def dot(self, other): return self.__class__(self.algebra.dot(self.data, _ensure_tensor(other, self)), self.algebra)
+    def outer(self, other): return self.__class__(self.algebra.outer(self.data, _ensure_tensor(other, self)), self.algebra)
 
     # -------------------------------- other funcs ------------------------------- #
     # i add random functions as I need to use them
     def diagonal(self, offset: int = 0, dim1: int = 0, dim2: int = 1):
         return self.__class__(self.data.diagonal(offset, dim1, dim2), self.algebra)
 
+    def kron(self, other): return self.__class__(self.algebra.kron(self.data, _ensure_tensor(other, self)), self.algebra)
+
 def algebraic_tensor(data, algebra: Algebra):
     t = AlgebraicTensor(data, algebra)
     return cast(torch.Tensor, t)
 
-def totorch(x):
+def totensor(x):
     if isinstance(x, AlgebraicTensor): return x.data
     if isinstance(x, torch.Tensor): return x
     raise TypeError(x)
 
+MaybeAlgebraicTensor = torch.Tensor | AlgebraicTensor
 NumberOrTensor = int | float | torch.Tensor# | AlgebraicTensor # since it is not a subclass, it is just casted as tensor

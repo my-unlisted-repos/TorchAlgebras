@@ -9,5 +9,5 @@ from .algebras import (
     TropicalSemiring,
     ViterbiSemiring,
 )
-from .base import ALGEBRAS, AlgebraType, algebraic_tensor, get_algebra, totorch, AlgebraicTensor, Algebra
+from .base import ALGEBRAS, AlgebraType, algebraic_tensor, get_algebra, totensor, AlgebraicTensor, Algebra
 from .layers import AlgebraicLinear
